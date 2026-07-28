@@ -1,0 +1,15 @@
+node_modules/
+dist/
+dist-tsc/
+*.tsbuildinfo
+.testmedia/
+.DS_Store
+apps/desktop/release/
+
+# Personal/working data — real file paths, unreleased track names, etc.
+local/
+
+# Leftover logo-generation scratch files
+/black.png
+/logo-raw.png
+/ChatGPT Image*.png

@@ -1,0 +1,22 @@
+{
+  "name": "@video-editor/engine-ffmpeg",
+  "version": "1.0.0",
+  "description": "Desktop render engine: probes media and compiles a timeline into a deterministic FFmpeg render.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@video-editor/core": "*",
+    "ffmpeg-static": "^5.2.0",
+    "ffprobe-static": "^3.1.0"
+  }
+}

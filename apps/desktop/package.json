@@ -1,0 +1,65 @@
+{
+  "name": "@video-editor/desktop",
+  "version": "1.0.0",
+  "description": "OmniCut desktop app: timeline editor, reactive music-video engine, YouTube publish queue, and an in-app AI agent console — all syncing live via the shared project store.",
+  "author": "WillBe89",
+  "type": "module",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "node build.mjs",
+    "dev": "node build.mjs && electron .",
+    "start": "electron .",
+    "package": "node build.mjs && electron-builder --dir",
+    "package:installer": "node build.mjs && electron-builder"
+  },
+  "dependencies": {
+    "@video-editor/core": "*",
+    "@video-editor/engine-ffmpeg": "*",
+    "@video-editor/youtube": "*"
+  },
+  "devDependencies": {
+    "@fontsource-variable/nunito": "^5.3.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "electron": "33.4.11",
+    "electron-builder": "^26.15.3",
+    "esbuild": "^0.28.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "build": {
+    "appId": "com.bigbe.omnicut",
+    "productName": "OmniCut",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*"
+    ],
+    "asarUnpack": [
+      "**/node_modules/ffmpeg-static/**",
+      "**/node_modules/ffprobe-static/**"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "assets/omnicut-icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "mac": {
+      "target": [
+        { "target": "dmg", "arch": ["x64", "arm64"] },
+        { "target": "zip", "arch": ["x64", "arm64"] }
+      ],
+      "icon": "assets/omnicut-icon.png",
+      "category": "public.app-category.video"
+    }
+  }
+}

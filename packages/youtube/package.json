@@ -1,0 +1,21 @@
+{
+  "name": "@video-editor/youtube",
+  "version": "1.0.0",
+  "description": "YouTube upload queue: OAuth2, resumable uploads, scheduled publish, thumbnail extraction from the video's own clean frame 0.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@video-editor/engine-ffmpeg": "*",
+    "googleapis": "^173.0.0"
+  }
+}
