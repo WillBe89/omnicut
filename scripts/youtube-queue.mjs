@@ -14,6 +14,9 @@
  *   node scripts/youtube-queue.mjs run-all <folder>          # run + sync-playlist in one go
  *   node scripts/youtube-queue.mjs reschedule <folder> --start "..." [--every-days 3]
  *   node scripts/youtube-queue.mjs folders                   # list folders registered for the GUI
+ *   node scripts/youtube-queue.mjs schedule                  # every folder's releases, one chronological list
+ *   node scripts/youtube-queue.mjs refresh-live <folder>     # pull real status + views/likes/comments from YouTube
+ *   node scripts/youtube-queue.mjs upload-settings-set <folder> [--category 10] [--made-for-kids] [--license creativeCommon] [--no-embed] [--no-public-stats] [--no-notify]
  *
  * The queue file lives at <folder>/.youtube-queue.json — safe to re-run any
  * command; each only acts on what's actually new/pending/missing.
@@ -29,16 +32,25 @@ import {
   getQueueSnapshot, addFolderToQueue, runQueueUploads, retryQueueThumbnails,
   setQueuePlaylist, setQueueAccount, previewPlaylistSync, syncQueuePlaylist, rescheduleQueue,
   registerFolder, listKnownFoldersWithSummary,
-  listAccounts, addAccount, removeAccount, completeAccountAuth, DEFAULT_ACCOUNT_ID,
-  runAllFolders,
+  listAccounts, addAccount, removeAccount, completeAccountAuth, reauthorizeAccount, DEFAULT_ACCOUNT_ID,
+  runAllFolders, getUnifiedSchedule, refreshLiveStatus, setUploadDefaults, getVideoAnalytics, getChannelTrend,
+  getEntryComments, postEntryComment, replyToEntryComment,
+  checkSeo, suggestKeywords, bulkUpdateEntries, getAllChannelDashboards,
 } from "@video-editor/youtube";
 
 const [, , cmd, ...rest] = process.argv;
 const flags = new Map();
 const positional = [];
 for (let i = 0; i < rest.length; i++) {
-  if (rest[i].startsWith("--")) { flags.set(rest[i].slice(2), rest[i + 1]); i++; }
-  else positional.push(rest[i]);
+  if (rest[i].startsWith("--")) {
+    const key = rest[i].slice(2);
+    const next = rest[i + 1];
+    // Only consume the next token as this flag's value if it isn't itself a
+    // flag — otherwise a boolean flag (e.g. --dry, --made-for-kids) directly
+    // followed by another flag would silently swallow it as a bogus value.
+    if (next !== undefined && !next.startsWith("--")) { flags.set(key, next); i++; }
+    else flags.set(key, "true");
+  } else positional.push(rest[i]);
 }
 
 function usageAndExit() {
@@ -55,10 +67,15 @@ function usageAndExit() {
     "  node scripts/youtube-queue.mjs run-everything   # every registered folder, concurrently\n" +
     "  node scripts/youtube-queue.mjs reschedule <folder> --start \"...\" [--every-days 3]\n" +
     "  node scripts/youtube-queue.mjs folders\n" +
+    "  node scripts/youtube-queue.mjs schedule                 # every folder's releases, one chronological list\n" +
+    "  node scripts/youtube-queue.mjs refresh-live <folder>     # pull real status + views/likes/comments from YouTube\n" +
+    "  node scripts/youtube-queue.mjs upload-settings-set <folder> [--category 10] [--made-for-kids|--not-made-for-kids] [--license youtube|creativeCommon] [--no-embed] [--no-public-stats] [--no-notify] [--description-template \"{title}\\n\\nlinks...\"] [--auto-comment \"...\"]\n" +
     "  node scripts/youtube-queue.mjs account-add <id> --label \"...\" [--client-secret <path>]\n" +
     "  node scripts/youtube-queue.mjs account-list\n" +
     "  node scripts/youtube-queue.mjs account-remove <id>\n" +
-    "  node scripts/youtube-queue.mjs account-set <folder> --account <id>",
+    "  node scripts/youtube-queue.mjs account-set <folder> --account <id>\n" +
+    "  node scripts/youtube-queue.mjs account-reauth [id]     # re-grant permissions (needed once for Analytics on older accounts)\n" +
+    "  node scripts/youtube-queue.mjs analytics <folder> <video-id>   # watch time, retention, traffic sources",
   );
   process.exit(1);
 }
@@ -226,6 +243,32 @@ function cmdAccountRemove() {
   console.log(`Account "${id}" removed (its folders will fall back to the default account).`);
 }
 
+async function cmdAccountReauth() {
+  const id = positional[0] ?? DEFAULT_ACCOUNT_ID;
+  console.log(`Re-authorizing "${id}"… check your browser.`);
+  const channel = await reauthorizeAccount(id);
+  console.log(`✅ "${id}" re-authorized — channel "${channel}". Newly-added scopes (e.g. Analytics) are now granted.`);
+}
+
+async function cmdAnalytics() {
+  const folder = resolve(positional[0] ?? ".");
+  const entryId = positional[1];
+  if (!entryId) { console.error('video id is required, e.g. analytics "<folder>" "Bad Habit"'); process.exit(1); }
+  const { analytics, trafficSources } = await getVideoAnalytics(folder, entryId);
+  if (!analytics) { console.log("No analytics data yet — check back once it's had some views."); return; }
+  const mins = Math.floor(analytics.averageViewDuration / 60);
+  const secs = Math.round(analytics.averageViewDuration % 60);
+  console.log(`Views: ${analytics.views}`);
+  console.log(`Estimated minutes watched: ${Math.round(analytics.estimatedMinutesWatched)}`);
+  console.log(`Average view duration: ${mins}:${String(secs).padStart(2, "0")}`);
+  console.log(`Average % viewed: ${analytics.averageViewPercentage.toFixed(1)}%`);
+  console.log(`Subscribers: +${analytics.subscribersGained} / -${analytics.subscribersLost}`);
+  if (trafficSources.length > 0) {
+    console.log(`\nTop traffic sources:`);
+    for (const t of trafficSources.slice(0, 8)) console.log(`  ${t.source}: ${t.views}`);
+  }
+}
+
 async function cmdRunEverything() {
   const folders = listKnownFoldersWithSummary().map((f) => f.path);
   if (folders.length === 0) { console.log("No folders registered."); return; }
@@ -243,6 +286,151 @@ async function cmdRunEverything() {
   }
 }
 
+function cmdUploadSettingsSet() {
+  const folder = resolve(positional[0] ?? ".");
+  const defaults = {};
+  if (flags.has("category")) defaults.categoryId = flags.get("category");
+  if (flags.has("made-for-kids")) defaults.madeForKids = true;
+  if (flags.has("not-made-for-kids")) defaults.madeForKids = false;
+  if (flags.has("license")) defaults.license = flags.get("license");
+  if (flags.has("no-embed")) defaults.embeddable = false;
+  if (flags.has("no-public-stats")) defaults.publicStatsViewable = false;
+  if (flags.has("no-notify")) defaults.notifySubscribers = false;
+  if (flags.has("description-template")) defaults.descriptionTemplate = flags.get("description-template");
+  if (flags.has("auto-comment")) defaults.autoCommentTemplate = flags.get("auto-comment");
+  setUploadDefaults(folder, defaults);
+  console.log(`Upload defaults updated for new videos added to ${folder}:`, defaults);
+}
+
+function cmdSchedule() {
+  const items = getUnifiedSchedule();
+  if (items.length === 0) { console.log("Nothing queued anywhere yet."); return; }
+  let lastDay = "";
+  for (const { folderLabel, entry } of items) {
+    const day = entry.publishAt ? new Date(entry.publishAt).toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric", year: "numeric" }) : "No date set";
+    if (day !== lastDay) { console.log(`\n${day}`); lastDay = day; }
+    const status =
+      entry.status === "error" ? `❌ ${entry.error}`
+      : entry.status === "pending" ? "⏳ pending upload"
+      : entry.livePrivacyStatus === "public" ? `🌐 live${entry.addedToPlaylist ? " · in playlist" : ""}`
+      : `🔒 scheduled${entry.livePrivacyStatus ? "" : " (live status unchecked — run refresh-live)"}`;
+    console.log(`  [${folderLabel}] ${entry.title} — ${status}`);
+  }
+}
+
+async function cmdRefreshLive() {
+  const folder = resolve(positional[0] ?? ".");
+  requireAuth();
+  const touched = await refreshLiveStatus(folder);
+  if (touched.length === 0) { console.log("Nothing to check (no uploaded videos yet)."); return; }
+  for (const e of touched) console.log(`  ${e.title} — ${e.livePrivacyStatus}`);
+  console.log(`\nChecked ${touched.length} video(s).`);
+}
+
+function cmdChannelHealth() {
+  const accountId = positional[0] ?? DEFAULT_ACCOUNT_ID;
+  const t = getChannelTrend(accountId);
+  if (!t.latest) { console.log(`No history yet for "${accountId}" — it accumulates each time you run \`refresh-live\` or \`schedule\`'s Refresh.`); return; }
+  console.log(`As of ${t.latest.date}: ${t.latest.subscriberCount} subscribers, ${t.latest.viewCount} total views, ${t.latest.videoCount} videos.`);
+  if (t.last7Days) {
+    console.log(`Last 7 days: +${t.last7Days.views} views, +${t.last7Days.subscribers} subs.`);
+    if (t.prev7Days) console.log(`Previous 7 days: +${t.prev7Days.views} views, +${t.prev7Days.subscribers} subs.`);
+  } else {
+    console.log("Not enough history yet for a week-over-week trend (needs 8+ recorded days).");
+  }
+}
+
+async function cmdComments() {
+  const folder = resolve(positional[0] ?? ".");
+  const entryId = positional[1];
+  if (!entryId) { console.error('video id is required, e.g. comments "<folder>" "Bad Habit"'); process.exit(1); }
+  const comments = await getEntryComments(folder, entryId);
+  if (comments.length === 0) { console.log("No comments yet (or comments are off for this video)."); return; }
+  for (const c of comments) {
+    console.log(`[${c.id}] ${c.authorDisplayName} (👍${c.likeCount}, ${new Date(c.publishedAt).toLocaleDateString()}):`);
+    console.log(`  ${c.textDisplay.replace(/\n/g, "\n  ")}`);
+    if (c.totalReplyCount) console.log(`  (${c.totalReplyCount} replies)`);
+  }
+}
+
+async function cmdCommentPost() {
+  const folder = resolve(positional[0] ?? ".");
+  const entryId = positional[1];
+  const text = flags.get("text");
+  if (!entryId || !text) { console.error('usage: comment-post "<folder>" "<video-id>" --text "..."'); process.exit(1); }
+  const id = await postEntryComment(folder, entryId, text);
+  console.log(`Posted comment ${id}.`);
+}
+
+async function cmdCommentReply() {
+  const folder = resolve(positional[0] ?? ".");
+  const parentId = positional[1];
+  const text = flags.get("text");
+  if (!parentId || !text) { console.error('usage: comment-reply "<folder>" "<parent-comment-id>" --text "..."'); process.exit(1); }
+  const id = await replyToEntryComment(folder, parentId, text);
+  console.log(`Posted reply ${id}.`);
+}
+
+function cmdSeoCheck() {
+  const folder = resolve(positional[0] ?? ".");
+  const entryId = positional[1];
+  if (!entryId) { console.error('usage: seo-check "<folder>" "<video-id>"'); process.exit(1); }
+  const queue = getQueueSnapshot(folder);
+  const entry = queue.entries.find((e) => e.id === entryId);
+  if (!entry) { console.error(`No queue entry "${entryId}" in ${folder}`); process.exit(1); }
+  const report = checkSeo({ title: entry.title, description: entry.description, tags: entry.tags });
+  console.log(`SEO score: ${report.score}%\n`);
+  for (const c of report.checks) console.log(`${c.passed ? "✓" : "✗"} ${c.label}: ${c.message}`);
+}
+
+async function cmdKeywordSuggest() {
+  const query = positional.join(" ");
+  if (!query) { console.error('usage: keyword-suggest <query>'); process.exit(1); }
+  const suggestions = await suggestKeywords(query);
+  if (suggestions.length === 0) { console.log("No suggestions found."); return; }
+  for (const s of suggestions) console.log(`  ${s}`);
+}
+
+async function cmdBulkEdit() {
+  const folder = resolve(positional[0] ?? ".");
+  const ids = flags.has("all")
+    ? getQueueSnapshot(folder).entries.filter((e) => e.status === "uploaded").map((e) => e.id)
+    : (flags.get("ids") ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  if (ids.length === 0) { console.error('specify --ids "id1,id2,..." or --all'); process.exit(1); }
+
+  const patch = {};
+  if (flags.has("add-tag")) patch.addTags = [flags.get("add-tag")];
+  if (flags.has("remove-tag")) patch.removeTags = [flags.get("remove-tag")];
+  if (flags.has("category")) patch.categoryId = flags.get("category");
+  if (flags.has("privacy")) patch.privacyStatus = flags.get("privacy");
+  if (flags.has("made-for-kids")) patch.madeForKids = true;
+  if (flags.has("not-made-for-kids")) patch.madeForKids = false;
+
+  console.log(`Applying to ${ids.length} video(s)…`);
+  const result = await bulkUpdateEntries(folder, ids, patch, (id) => console.log(`  ${id}…`));
+  console.log(`\nUpdated ${result.updated.length}/${ids.length}.`);
+  if (result.quotaHit) console.log("Daily quota reached — re-run to continue with the rest.");
+  for (const f of result.failed) console.log(`  FAILED ${f.id}: ${f.error}`);
+}
+
+async function cmdDashboard() {
+  const dashboards = await getAllChannelDashboards();
+  if (dashboards.length === 0) { console.log("No accounts registered yet."); return; }
+  for (const d of dashboards) {
+    console.log(`\n=== ${d.accountLabel}${d.channelTitle ? ` (${d.channelTitle})` : ""} ===`);
+    if (d.lifetime) console.log(`Lifetime: ${d.lifetime.subscriberCount} subs, ${d.lifetime.viewCount} views, ${d.lifetime.videoCount} videos (as of ${d.lifetime.date})`);
+    else console.log("No lifetime snapshot yet — run refresh-live at least once.");
+    if (d.weekTrend) console.log(`Last 7 days: +${d.weekTrend.views} views, +${d.weekTrend.subscribers} subs`);
+    if (d.last28Days) {
+      const mins = Math.floor(d.last28Days.averageViewDuration / 60);
+      const secs = Math.round(d.last28Days.averageViewDuration % 60);
+      console.log(`Last 28 days: ${d.last28Days.views} views, ${Math.round(d.last28Days.estimatedMinutesWatched)} min watched, ${mins}:${String(secs).padStart(2, "0")} avg duration, ${d.last28Days.averageViewPercentage.toFixed(0)}% avg viewed, +${d.last28Days.subscribersGained}/-${d.last28Days.subscribersLost} subs`);
+    } else if (d.error) {
+      console.log(`Analytics unavailable: ${d.error}`);
+    }
+  }
+}
+
 function cmdAccountSet() {
   const folder = resolve(positional[0] ?? ".");
   const accountId = flags.get("account");
@@ -251,21 +439,41 @@ function cmdAccountSet() {
   console.log(`Folder now uploads via account "${accountId}".`);
 }
 
-switch (cmd) {
-  case "init": await cmdInit(); break;
-  case "add": await cmdAdd(); break;
-  case "list": cmdList(); break;
-  case "run": await cmdRun(); break;
-  case "thumbnails": await cmdThumbnails(); break;
-  case "playlist-set": cmdPlaylistSet(); break;
-  case "sync-playlist": await cmdSyncPlaylist(); break;
-  case "run-all": await cmdRunAll(); break;
-  case "run-everything": await cmdRunEverything(); break;
-  case "reschedule": cmdReschedule(); break;
-  case "folders": cmdFolders(); break;
-  case "account-add": await cmdAccountAdd(); break;
-  case "account-list": cmdAccountList(); break;
-  case "account-remove": cmdAccountRemove(); break;
-  case "account-set": cmdAccountSet(); break;
-  default: usageAndExit();
+try {
+  switch (cmd) {
+    case "init": await cmdInit(); break;
+    case "add": await cmdAdd(); break;
+    case "list": cmdList(); break;
+    case "run": await cmdRun(); break;
+    case "thumbnails": await cmdThumbnails(); break;
+    case "playlist-set": cmdPlaylistSet(); break;
+    case "sync-playlist": await cmdSyncPlaylist(); break;
+    case "run-all": await cmdRunAll(); break;
+    case "run-everything": await cmdRunEverything(); break;
+    case "reschedule": cmdReschedule(); break;
+    case "folders": cmdFolders(); break;
+    case "schedule": cmdSchedule(); break;
+    case "refresh-live": await cmdRefreshLive(); break;
+    case "upload-settings-set": cmdUploadSettingsSet(); break;
+    case "account-add": await cmdAccountAdd(); break;
+    case "account-list": cmdAccountList(); break;
+    case "account-remove": cmdAccountRemove(); break;
+    case "account-reauth": await cmdAccountReauth(); break;
+    case "analytics": await cmdAnalytics(); break;
+    case "channel-health": cmdChannelHealth(); break;
+    case "comments": await cmdComments(); break;
+    case "comment-post": await cmdCommentPost(); break;
+    case "comment-reply": await cmdCommentReply(); break;
+    case "seo-check": cmdSeoCheck(); break;
+    case "keyword-suggest": await cmdKeywordSuggest(); break;
+    case "bulk-edit": await cmdBulkEdit(); break;
+    case "dashboard": await cmdDashboard(); break;
+    case "account-set": cmdAccountSet(); break;
+    default: usageAndExit();
+  }
+} catch (err) {
+  // Named errors (QuotaExceededError, AnalyticsScopeError, AnalyticsApiDisabledError, …)
+  // have an actionable .message — show just that instead of a raw stack dump.
+  console.error(`\n❌ ${err.message ?? err}`);
+  process.exit(1);
 }

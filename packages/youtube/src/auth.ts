@@ -22,6 +22,15 @@ export type OAuth2Client = InstanceType<typeof google.auth.OAuth2>;
 const SCOPES = [
   "https://www.googleapis.com/auth/youtube.upload",
   "https://www.googleapis.com/auth/youtube",
+  // Comments (commentThreads.list/comments.insert) specifically reject the
+  // general "youtube" scope above and require this more specific one — a
+  // real, confirmed API quirk, not a guess.
+  "https://www.googleapis.com/auth/youtube.force-ssl",
+  // Read-only channel/video reports (watch time, retention, traffic sources,
+  // subscribers gained) — a separate API+scope from the Data API above.
+  // Accounts authorized before this was added need one re-consent (see
+  // accounts.ts's reauthorizeAccount) to actually be granted it.
+  "https://www.googleapis.com/auth/yt-analytics.readonly",
 ];
 
 interface ClientSecretFile {

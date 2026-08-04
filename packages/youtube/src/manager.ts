@@ -5,11 +5,16 @@
  */
 import { readdirSync, mkdirSync, existsSync } from "node:fs";
 import { join, basename, extname } from "node:path";
-import { withAccountAuth, DEFAULT_ACCOUNT_ID } from "./accounts.js";
+import { withAccountAuth, DEFAULT_ACCOUNT_ID, listAccounts, getAccount } from "./accounts.js";
 import { extractThumbnail } from "./thumbnail.js";
-import { loadQueue, saveQueue, type Queue, type QueueEntry, type PrivacyStatus } from "./queue.js";
-import { uploadVideo, setThumbnail, QuotaExceededError } from "./upload.js";
+import { loadQueue, saveQueue, type Queue, type QueueEntry, type PrivacyStatus, type UploadDefaults } from "./queue.js";
+import { uploadVideo, setThumbnail, updateLiveVideo, QuotaExceededError } from "./upload.js";
 import { planPlaylistSync, runPlaylistSync, type SyncPlan } from "./sync.js";
+import { fetchLiveStatus } from "./playlists.js";
+import { listKnownFolders } from "./registry.js";
+import { fetchVideoAnalytics, fetchTrafficSources, fetchChannelAnalytics, type VideoAnalytics, type TrafficSource } from "./analytics.js";
+import { recordChannelSnapshot, getChannelTrend } from "./channelhealth.js";
+import { listTopComments, postComment, replyToComment, type CommentSummary } from "./comments.js";
 import type { OAuth2Client } from "./auth.js";
 
 export function queuePathFor(folder: string): string {
@@ -27,13 +32,14 @@ function withFolderAuth<T>(folder: string, fn: (auth: OAuth2Client) => Promise<T
   return withAccountAuth(queue.accountId ?? DEFAULT_ACCOUNT_ID, fn);
 }
 
-function defaultMetadata(songName: string, opts: { titlePrefix?: string; description?: string } = {}) {
+function applyTemplate(template: string, vars: { title: string }): string {
+  return template.replace(/\{title\}/g, vars.title);
+}
+
+function defaultMetadata(songName: string, opts: { titlePrefix?: string; description?: string; descriptionTemplate?: string } = {}) {
   const title = opts.titlePrefix ? `${opts.titlePrefix} - ${songName}` : songName;
-  return {
-    title,
-    description: opts.description ?? title,
-    tags: [songName],
-  };
+  const description = opts.description ?? (opts.descriptionTemplate ? applyTemplate(opts.descriptionTemplate, { title }) : title);
+  return { title, description, tags: [songName] };
 }
 
 function scanVideos(folder: string): { id: string; path: string }[] {
@@ -80,11 +86,12 @@ export async function addFolderToQueue(folder: string, opts: AddOptions = {}): P
     cursor = new Date(new Date(scheduled[scheduled.length - 1]!).getTime() + everyDays * 24 * 3600 * 1000);
   }
 
+  const defaults = queue.uploadDefaults ?? {};
   const added: AddedEntry[] = [];
   for (const v of videos) {
     const thumbPath = join(thumbDir, `${v.id}.jpg`);
     await extractThumbnail(v.path, thumbPath);
-    const meta = defaultMetadata(v.id, { titlePrefix: opts.titlePrefix, description: opts.description });
+    const meta = defaultMetadata(v.id, { titlePrefix: opts.titlePrefix, description: opts.description, descriptionTemplate: defaults.descriptionTemplate });
     const publishAt = cursor.toISOString();
     queue.entries.push({
       id: v.id,
@@ -93,11 +100,16 @@ export async function addFolderToQueue(folder: string, opts: AddOptions = {}): P
       title: meta.title,
       description: meta.description,
       tags: [...meta.tags, ...extraTags],
-      categoryId: "10",
+      categoryId: defaults.categoryId ?? "10",
       privacyStatus: "private",
       publishAt,
       status: "pending",
       addedAt: new Date().toISOString(),
+      madeForKids: defaults.madeForKids,
+      license: defaults.license,
+      embeddable: defaults.embeddable,
+      publicStatsViewable: defaults.publicStatsViewable,
+      notifySubscribers: defaults.notifySubscribers,
     });
     added.push({ id: v.id, publishAt });
     cursor = new Date(cursor.getTime() + everyDays * 24 * 3600 * 1000);
@@ -142,6 +154,11 @@ export async function runQueueUploads(
         saveQueue(queuePath, queue);
         uploaded++;
         opts.onProgress?.({ kind: "done", id: entry.id, videoId });
+        if (queue.uploadDefaults?.autoCommentTemplate) {
+          // Best-effort: a failed auto-comment shouldn't fail the upload itself.
+          try { await postComment(auth, videoId, applyTemplate(queue.uploadDefaults.autoCommentTemplate, { title: entry.title })); }
+          catch (err) { opts.onProgress?.({ kind: "error", id: entry.id, error: `Uploaded, but auto-comment failed: ${(err as Error).message}` }); }
+        }
       } catch (err) {
         if (err instanceof QuotaExceededError) {
           opts.onProgress?.({ kind: "quota", uploaded, total: pending.length });
@@ -221,21 +238,29 @@ export async function previewPlaylistSync(folder: string): Promise<SyncPlan> {
   return withFolderAuth(folder, (auth) => planPlaylistSync(auth, queue));
 }
 
-/** Patch a single entry's editable fields (title, description, tags,
- *  publishAt, privacyStatus) — used by the GUI's schedule/metadata editor.
- *  Only meaningful before upload; already-uploaded videos' metadata must be
- *  changed on YouTube directly (out of scope here). */
-export function updateQueueEntry(
-  folder: string,
-  entryId: string,
-  patch: Partial<Pick<QueueEntry, "title" | "description" | "tags" | "publishAt" | "privacyStatus">>,
-): QueueEntry {
+export type QueueEntryPatch = Partial<Pick<QueueEntry,
+  "title" | "description" | "tags" | "publishAt" | "privacyStatus" | "categoryId" |
+  "madeForKids" | "license" | "embeddable" | "publicStatsViewable"
+>>;
+
+/** Patch a queue entry's editable fields. Always updates the local record;
+ *  if the video has ALREADY been uploaded, also pushes the same fields to
+ *  YouTube itself (videos.update) — so editing works identically whether a
+ *  video is still pending or already live, instead of forcing a trip to
+ *  YouTube directly to fix a typo after the fact. */
+export async function updateQueueEntry(folder: string, entryId: string, patch: QueueEntryPatch): Promise<QueueEntry> {
   const queuePath = queuePathFor(folder);
   const queue = loadQueue(queuePath);
   const entry = queue.entries.find((e) => e.id === entryId);
   if (!entry) throw new Error(`No queue entry "${entryId}" in ${folder}`);
   Object.assign(entry, patch);
   saveQueue(queuePath, queue);
+
+  if (entry.status === "uploaded" && entry.youtubeVideoId) {
+    const { title, description, tags, categoryId, privacyStatus, publishAt, madeForKids, license, embeddable, publicStatsViewable } = patch;
+    await withFolderAuth(folder, (auth) =>
+      updateLiveVideo(auth, entry.youtubeVideoId!, { title, description, tags, categoryId, privacyStatus, publishAt, madeForKids, license, embeddable, publicStatsViewable }));
+  }
   return entry;
 }
 
@@ -306,6 +331,187 @@ export async function runAllFolders(
   );
 }
 
+/** Ask YouTube for the REAL current privacyStatus AND view/like/comment
+ *  counts of every uploaded video in this folder, caching them on each entry
+ *  (livePrivacyStatus/viewCount/likeCount/commentCount/liveCheckedAt), so the
+ *  schedule/queue views can show "actually public" vs. "still scheduled" plus
+ *  live stats without hitting the API on every render. */
+export async function refreshLiveStatus(folder: string): Promise<QueueEntry[]> {
+  const queuePath = queuePathFor(folder);
+  const queue = loadQueue(queuePath);
+  const targets = queue.entries.filter((e) => e.status === "uploaded" && e.youtubeVideoId);
+  if (targets.length === 0) return [];
+
+  return withFolderAuth(folder, async (auth) => {
+    const live = await fetchLiveStatus(auth, targets.map((e) => e.youtubeVideoId!));
+    const checkedAt = new Date().toISOString();
+    const touched: QueueEntry[] = [];
+    for (const entry of targets) {
+      const status = live.get(entry.youtubeVideoId!);
+      if (status) {
+        entry.livePrivacyStatus = status.privacyStatus;
+        entry.viewCount = status.viewCount;
+        entry.likeCount = status.likeCount;
+        entry.commentCount = status.commentCount;
+        entry.liveCheckedAt = checkedAt;
+        touched.push(entry);
+      }
+    }
+    saveQueue(queuePath, queue);
+    // Best-effort: a snapshot failure shouldn't fail the video-status refresh itself.
+    try { await recordChannelSnapshot(queue.accountId ?? DEFAULT_ACCOUNT_ID, auth); } catch { /* channel health is a bonus, not critical */ }
+    return touched;
+  });
+}
+
+export interface EntryAnalytics {
+  analytics: VideoAnalytics | null;
+  trafficSources: TrafficSource[];
+}
+
+/** Real YouTube Analytics for one queue entry — watch time, retention,
+ *  subscriber deltas, and where its views actually came from. Requires the
+ *  folder's account to have granted the Analytics scope (see
+ *  reauthorizeAccount in accounts.ts) — throws AnalyticsScopeError if not. */
+export async function getVideoAnalytics(folder: string, entryId: string): Promise<EntryAnalytics> {
+  const queue = getQueueSnapshot(folder);
+  const entry = queue.entries.find((e) => e.id === entryId);
+  if (!entry?.youtubeVideoId) throw new Error(`"${entryId}" hasn't been uploaded yet — no analytics to show.`);
+  return withFolderAuth(folder, async (auth) => {
+    const [analytics, trafficSources] = await Promise.all([
+      fetchVideoAnalytics(auth, entry.youtubeVideoId!),
+      fetchTrafficSources(auth, entry.youtubeVideoId!),
+    ]);
+    return { analytics, trafficSources };
+  });
+}
+
+/** Top comments on one queue entry's video (empty array if comments are off — not an error). */
+export async function getEntryComments(folder: string, entryId: string): Promise<CommentSummary[]> {
+  const queue = getQueueSnapshot(folder);
+  const entry = queue.entries.find((e) => e.id === entryId);
+  if (!entry?.youtubeVideoId) throw new Error(`"${entryId}" hasn't been uploaded yet — no comments to show.`);
+  return withFolderAuth(folder, (auth) => listTopComments(auth, entry.youtubeVideoId!));
+}
+
+/** Post a new top-level comment on one queue entry's video (e.g. links/CTA). */
+export async function postEntryComment(folder: string, entryId: string, text: string): Promise<string> {
+  const queue = getQueueSnapshot(folder);
+  const entry = queue.entries.find((e) => e.id === entryId);
+  if (!entry?.youtubeVideoId) throw new Error(`"${entryId}" hasn't been uploaded yet.`);
+  return withFolderAuth(folder, (auth) => postComment(auth, entry.youtubeVideoId!, text));
+}
+
+/** Reply to an existing comment thread on one of this folder's videos. */
+export async function replyToEntryComment(folder: string, parentCommentId: string, text: string): Promise<string> {
+  return withFolderAuth(folder, (auth) => replyToComment(auth, parentCommentId, text));
+}
+
+/** Set this folder's per-video upload defaults (category, made-for-kids,
+ *  license, etc.) — applied to every new video the next time it's added to
+ *  the queue via addFolderToQueue. Doesn't retroactively change videos
+ *  already queued or uploaded. */
+export function setUploadDefaults(folder: string, defaults: UploadDefaults): void {
+  const queuePath = queuePathFor(folder);
+  const queue = loadQueue(queuePath);
+  queue.uploadDefaults = { ...queue.uploadDefaults, ...defaults };
+  saveQueue(queuePath, queue);
+}
+
+export interface BulkEditPatch {
+  addTags?: string[];
+  removeTags?: string[];
+  categoryId?: string;
+  privacyStatus?: PrivacyStatus;
+  madeForKids?: boolean;
+  license?: "youtube" | "creativeCommon";
+  embeddable?: boolean;
+  publicStatsViewable?: boolean;
+}
+
+export interface BulkEditResult {
+  updated: string[];
+  failed: { id: string; error: string }[];
+  quotaHit: boolean;
+}
+
+/** Apply the same change (add/remove a tag, change category/privacy/etc.)
+ *  across many ALREADY-UPLOADED videos in a folder at once — e.g. retagging
+ *  a whole back-catalog, or flipping madeForKids channel-wide. Each video is
+ *  a separate videos.update call (50 quota units apiece), so a big batch can
+ *  legitimately hit the daily quota — that's reported back, not swallowed,
+ *  same as every other bulk operation in this file. */
+export async function bulkUpdateEntries(
+  folder: string,
+  entryIds: string[],
+  patch: BulkEditPatch,
+  onProgress?: (id: string) => void,
+): Promise<BulkEditResult> {
+  const queuePath = queuePathFor(folder);
+  const queue = loadQueue(queuePath);
+  const idSet = new Set(entryIds);
+  const targets = queue.entries.filter((e) => idSet.has(e.id) && e.status === "uploaded" && e.youtubeVideoId);
+  const updated: string[] = [];
+  const failed: { id: string; error: string }[] = [];
+  if (targets.length === 0) return { updated, failed, quotaHit: false };
+
+  return withFolderAuth(folder, async (auth) => {
+    for (const entry of targets) {
+      onProgress?.(entry.id);
+      const nextTags = patch.addTags || patch.removeTags
+        ? [...new Set([...entry.tags, ...(patch.addTags ?? [])])].filter((t) => !(patch.removeTags ?? []).includes(t))
+        : undefined;
+      try {
+        await updateLiveVideo(auth, entry.youtubeVideoId!, {
+          tags: nextTags,
+          categoryId: patch.categoryId,
+          privacyStatus: patch.privacyStatus,
+          madeForKids: patch.madeForKids,
+          license: patch.license,
+          embeddable: patch.embeddable,
+          publicStatsViewable: patch.publicStatsViewable,
+        });
+        if (nextTags) entry.tags = nextTags;
+        if (patch.categoryId !== undefined) entry.categoryId = patch.categoryId;
+        if (patch.privacyStatus !== undefined) entry.privacyStatus = patch.privacyStatus;
+        if (patch.madeForKids !== undefined) entry.madeForKids = patch.madeForKids;
+        if (patch.license !== undefined) entry.license = patch.license;
+        if (patch.embeddable !== undefined) entry.embeddable = patch.embeddable;
+        if (patch.publicStatsViewable !== undefined) entry.publicStatsViewable = patch.publicStatsViewable;
+        saveQueue(queuePath, queue);
+        updated.push(entry.id);
+      } catch (err) {
+        if (err instanceof QuotaExceededError) return { updated, failed, quotaHit: true };
+        failed.push({ id: entry.id, error: (err as Error).message });
+      }
+    }
+    return { updated, failed, quotaHit: false };
+  });
+}
+
+export interface ScheduleItem {
+  folder: string;
+  folderLabel: string;
+  entry: QueueEntry;
+}
+
+/** One combined, chronologically-sorted release schedule across every
+ *  registered folder — reads local queue files only (no API calls, no
+ *  quota cost), so it's cheap to refresh on every panel open. */
+export function getUnifiedSchedule(): ScheduleItem[] {
+  const items: ScheduleItem[] = [];
+  for (const f of listKnownFolders()) {
+    const queue = getQueueSnapshot(f.path);
+    for (const entry of queue.entries) items.push({ folder: f.path, folderLabel: f.label, entry });
+  }
+  items.sort((a, b) => {
+    const da = a.entry.publishAt ? new Date(a.entry.publishAt).getTime() : Infinity;
+    const db = b.entry.publishAt ? new Date(b.entry.publishAt).getTime() : Infinity;
+    return da - db;
+  });
+  return items;
+}
+
 export async function syncQueuePlaylist(
   folder: string,
   onProgress?: (msg: string) => void,
@@ -324,4 +530,48 @@ export async function syncQueuePlaylist(
       throw err;
     }
   });
+}
+
+export interface ChannelDashboardData {
+  accountId: string;
+  accountLabel: string;
+  channelTitle?: string;
+  /** Lifetime-to-date totals, from the most recent recorded snapshot (see channelhealth.ts). Null until "Refresh from YouTube" has run at least once. */
+  lifetime: { date: string; subscriberCount: number; viewCount: number; videoCount: number } | null;
+  /** Last 28 days (YouTube Studio's own default comparison window) — real Analytics API data. Null if the account hasn't granted Analytics access yet. */
+  last28Days: VideoAnalytics | null;
+  /** Views/subscribers gained in the last 7 recorded days vs. the 7 before — from local snapshot history, no extra API call. */
+  weekTrend: { views: number; subscribers: number } | null;
+  /** Set when this account's dashboard data couldn't be fetched (e.g. AnalyticsScopeError/AnalyticsApiDisabledError) — other fields still reflect whatever WAS available (lifetime/weekTrend are local, so they're often still present even if last28Days failed). */
+  error?: string;
+}
+
+/** One account's full dashboard: lifetime totals + a real 28-day Analytics
+ *  window + the local week-over-week trend — everything needed to judge
+ *  "how is this channel doing" at a glance, comparable across accounts. */
+export async function getChannelDashboard(accountId: string): Promise<ChannelDashboardData> {
+  const account = getAccount(accountId);
+  if (!account) throw new Error(`Unknown account "${accountId}".`);
+  const trend = getChannelTrend(accountId);
+  const base: ChannelDashboardData = {
+    accountId,
+    accountLabel: account.label,
+    channelTitle: account.channelTitle,
+    lifetime: trend.latest,
+    last28Days: null,
+    weekTrend: trend.last7Days,
+  };
+  try {
+    const last28Days = await withAccountAuth(accountId, (auth) => fetchChannelAnalytics(auth, 28));
+    return { ...base, last28Days };
+  } catch (err) {
+    return { ...base, error: (err as Error).message };
+  }
+}
+
+/** Every registered account's dashboard data, fetched concurrently — one
+ *  account's Analytics error (not yet re-authorized, API not enabled, etc.)
+ *  doesn't block the others from showing. */
+export async function getAllChannelDashboards(): Promise<ChannelDashboardData[]> {
+  return Promise.all(listAccounts().map((a) => getChannelDashboard(a.id)));
 }

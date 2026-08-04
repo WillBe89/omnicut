@@ -25,7 +25,7 @@ export async function planPlaylistSync(auth: OAuth2Client, queue: Queue): Promis
   const toAdd: QueueEntry[] = [];
   const notLiveYet: QueueEntry[] = [];
   for (const e of candidates) {
-    if (live.get(e.youtubeVideoId!) === "public") toAdd.push(e);
+    if (live.get(e.youtubeVideoId!)?.privacyStatus === "public") toAdd.push(e);
     else notLiveYet.push(e);
   }
   return { playlistId: queue.playlist.playlistId ?? null, toAdd, notLiveYet };

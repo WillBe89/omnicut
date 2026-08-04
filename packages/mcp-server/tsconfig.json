@@ -6,7 +6,8 @@
   },
   "references": [
     { "path": "../core" },
-    { "path": "../engine-ffmpeg" }
+    { "path": "../engine-ffmpeg" },
+    { "path": "../youtube" }
   ],
   "include": ["src/**/*"]
 }

@@ -86,16 +86,34 @@ export async function addVideoToPlaylist(auth: OAuth2Client, playlistId: string,
   }
 }
 
-/** Real, current status of videos (our local queue.json's privacyStatus can be
- *  stale once YouTube auto-flips a scheduled video to public server-side). */
-export async function fetchLiveStatus(auth: OAuth2Client, videoIds: string[]): Promise<Map<string, PrivacyStatus>> {
+export interface VideoStatus {
+  privacyStatus: PrivacyStatus;
+  viewCount?: number;
+  likeCount?: number;
+  commentCount?: number;
+}
+
+/** Real, current status AND stats of videos in one call (our local
+ *  queue.json's privacyStatus can be stale once YouTube auto-flips a
+ *  scheduled video to public server-side; view/like/comment counts are
+ *  never cached locally except by whoever calls this). videos.list costs a
+ *  flat 1 quota unit per up-to-50-id batch regardless of how many parts
+ *  are requested, so bundling stats in here is free. */
+export async function fetchLiveStatus(auth: OAuth2Client, videoIds: string[]): Promise<Map<string, VideoStatus>> {
   const youtube = google.youtube({ version: "v3", auth });
-  const out = new Map<string, PrivacyStatus>();
+  const out = new Map<string, VideoStatus>();
   for (let i = 0; i < videoIds.length; i += 50) {
     const batch = videoIds.slice(i, i + 50);
-    const res = await youtube.videos.list({ part: ["status"], id: batch });
+    const res = await youtube.videos.list({ part: ["status", "statistics"], id: batch });
     for (const item of res.data.items ?? []) {
-      if (item.id && item.status?.privacyStatus) out.set(item.id, item.status.privacyStatus as PrivacyStatus);
+      if (item.id && item.status?.privacyStatus) {
+        out.set(item.id, {
+          privacyStatus: item.status.privacyStatus as PrivacyStatus,
+          viewCount: item.statistics?.viewCount !== undefined ? Number(item.statistics.viewCount) : undefined,
+          likeCount: item.statistics?.likeCount !== undefined ? Number(item.statistics.likeCount) : undefined,
+          commentCount: item.statistics?.commentCount !== undefined ? Number(item.statistics.commentCount) : undefined,
+        });
+      }
     }
   }
   return out;

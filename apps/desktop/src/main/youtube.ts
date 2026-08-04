@@ -7,11 +7,15 @@
 import { ipcMain, dialog, type BrowserWindow } from "electron";
 import { basename } from "node:path";
 import {
-  listAccounts, addAccount, removeAccount, completeAccountAuth,
+  listAccounts, addAccount, removeAccount, completeAccountAuth, reauthorizeAccount,
   listKnownFoldersWithSummary, registerFolder, forgetFolder,
   getQueueSnapshot, addFolderToQueue, runQueueUploads, retryQueueThumbnails,
   setQueuePlaylist, setQueueAccount, previewPlaylistSync, syncQueuePlaylist,
   updateQueueEntry, rescheduleQueue, removeQueueEntry, runAllFolders,
+  getUnifiedSchedule, refreshLiveStatus, setUploadDefaults, getVideoAnalytics, getChannelTrend,
+  getEntryComments, postEntryComment, replyToEntryComment,
+  checkSeo, suggestKeywords, bulkUpdateEntries, getAllChannelDashboards,
+  type UploadDefaults, type QueueEntryPatch, type BulkEditPatch,
 } from "@video-editor/youtube";
 import { enableAutoSync, disableAutoSync, getAutoSyncStatus, runAutoSyncNow } from "./scheduler.js";
 
@@ -56,7 +60,7 @@ export function registerYoutubeIpc(getWindow: () => BrowserWindow | null): void 
   ipcMain.handle("yt:queue:add", (_e, folder: string, opts: { everyDays?: number; startDate?: string; extraTags?: string[]; titlePrefix?: string; description?: string }) =>
     addFolderToQueue(folder, opts));
 
-  ipcMain.handle("yt:queue:updateEntry", (_e, folder: string, entryId: string, patch: object) =>
+  ipcMain.handle("yt:queue:updateEntry", (_e, folder: string, entryId: string, patch: QueueEntryPatch) =>
     updateQueueEntry(folder, entryId, patch));
 
   ipcMain.handle("yt:queue:reschedule", (_e, folder: string, startDate: string, everyDays: number) =>
@@ -93,6 +97,40 @@ export function registerYoutubeIpc(getWindow: () => BrowserWindow | null): void 
     const win = getWindow();
     return runAllFolders(folders, (folder, ev) => win?.webContents.send("yt:upload:progress", { folder, ev }));
   });
+
+  // ── Cross-folder release schedule ──
+  ipcMain.handle("yt:schedule:get", () => getUnifiedSchedule());
+  ipcMain.handle("yt:schedule:refreshLive", (_e, folder: string) => refreshLiveStatus(folder));
+
+  // ── Per-folder upload defaults (category, made-for-kids, license, …) ──
+  ipcMain.handle("yt:uploadDefaults:set", (_e, folder: string, defaults: UploadDefaults) => setUploadDefaults(folder, defaults));
+
+  // ── Analytics ──
+  ipcMain.handle("yt:analytics:get", (_e, folder: string, entryId: string) => getVideoAnalytics(folder, entryId));
+
+  // ── Channel health (views/subscribers gained this week vs last) ──
+  ipcMain.handle("yt:channelHealth:get", (_e, accountId: string) => getChannelTrend(accountId));
+
+  // ── Comments ──
+  ipcMain.handle("yt:comments:list", (_e, folder: string, entryId: string) => getEntryComments(folder, entryId));
+  ipcMain.handle("yt:comments:post", (_e, folder: string, entryId: string, text: string) => postEntryComment(folder, entryId, text));
+  ipcMain.handle("yt:comments:reply", (_e, folder: string, parentId: string, text: string) => replyToEntryComment(folder, parentId, text));
+
+  // ── SEO: deterministic checklist (no network) + keyword suggestions (public, no auth) ──
+  ipcMain.handle("yt:seo:check", (_e, input: { title: string; description: string; tags: string[] }) => checkSeo(input));
+  ipcMain.handle("yt:seo:suggestKeywords", (_e, query: string) => suggestKeywords(query));
+
+  // ── Cross-channel dashboard ──
+  ipcMain.handle("yt:dashboard:get", () => getAllChannelDashboards());
+
+  // ── Bulk edit across many already-uploaded videos ──
+  ipcMain.handle("yt:bulkUpdate", async (_e, folder: string, entryIds: string[], patch: BulkEditPatch) => {
+    const win = getWindow();
+    return bulkUpdateEntries(folder, entryIds, patch, (id) => win?.webContents.send("yt:bulkUpdate:progress", { folder, id }));
+  });
+
+  // ── Re-authorize an account (e.g. to grant a scope added after it was first connected) ──
+  ipcMain.handle("yt:accounts:reauthorize", async (_e, id: string) => ({ channel: await reauthorizeAccount(id) }));
 
   // ── Scheduled (Windows Task Scheduler) automation ──
   ipcMain.handle("yt:auto:status", (_e, folder: string) => getAutoSyncStatus(folder));

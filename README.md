@@ -42,8 +42,9 @@ That is the difference between "AI video" and what OmniCut does instead.
 - **Independent artists and creators running multiple channels or brands** (a music project,
   a second channel for a different audience, whatever comes next) who want one release pipeline
   instead of juggling logins and manually uploading on a schedule.
-- **YouTube creators** who want a real release calendar — schedule now, publish later, sync
-  playlists automatically — instead of clicking "upload" one video at a time.
+- **YouTube creators** who want a real release calendar and real numbers — schedule now, publish
+  later, sync playlists automatically, then track actual Analytics and compare channels
+  side-by-side — instead of clicking "upload" one video at a time and checking Studio by hand.
 - **Anyone who wants AI *assistance* in editing without "AI video."** If you want a model to make
   editing decisions but refuse to accept generated/hallucinated footage, this is that tool.
 - **Developers** who want a programmable, MCP-exposed video/publishing engine they can script,
@@ -55,13 +56,16 @@ That is the difference between "AI video" and what OmniCut does instead.
   composited preview, export. The AI and the GUI edit the *same* project file, live.
 - **AI Editor console, built in** — connect any agent CLI on your PATH (Claude Code today) right
   inside the app; watch it make edits as you would, tool call by tool call.
-- **MCP server** — 29 deterministic editing tools exposed to any external MCP client.
+- **MCP server** — 31 deterministic tools exposed to any external MCP client (29 editing/render, 2 YouTube SEO helpers).
 - **Reactive music-video engine** — turns a cover (static or animated) + a song into a full-length
   video with a real per-song audio-reactive EQ, screen-shake on real kicks, falling dust, Ken
   Burns motion — all driven by an actual FFT of *that* track, not a canned animation.
 - **YouTube publish system** — a scheduled upload queue, automatic playlist sync, multi-account
   support, and real OS-level scheduled automation — with full GUI parity, not just a CLI.
-- **Packaged, installable app** — a real Windows installer, not just "run from source."
+- **YouTube channel management** — real Analytics (watch time, retention, traffic sources),
+  a cross-channel comparison dashboard, comment reading/replying, a deterministic SEO checklist +
+  real keyword suggestions, bulk metadata edits, and post-upload editing of already-live videos.
+- **Packaged, installable app** — real Windows + Mac installers, not just "run from source."
 
 ---
 
@@ -75,7 +79,7 @@ That is the difference between "AI video" and what OmniCut does instead.
                 │ mutates                                 │ reads
         ┌───────┴────────┐                        ┌───────┴────────┐
         │  MCP server     │                        │  Electron GUI   │
-        │  (29 AI tools)  │                        │  preview + edit │
+        │  (31 AI tools)  │                        │  preview + edit │
         └───────┬────────┘                        └────────────────┘
                 │ render
         ┌───────▼────────┐
@@ -94,8 +98,8 @@ functions, so nothing behaves differently depending on which one you used.
 |---|---|
 | `packages/core` | Platform-agnostic timeline model + edit operations. Pure TypeScript, **no native deps** — this is what ports to mobile later. |
 | `packages/engine-ffmpeg` | Probes media, compiles a timeline into a single deterministic FFmpeg invocation, and drives the reactive music-video engine (real FFT, per-frame RGBA generation streamed into FFmpeg). FFmpeg ships bundled via `ffmpeg-static`. |
-| `packages/youtube` | The publish system: OAuth (multi-account), upload queue, playlist sync, scheduling. One implementation shared by the CLI and the GUI. |
-| `packages/mcp-server` | Model Context Protocol server exposing 29 editing tools to any MCP client (Claude Desktop, Claude Code, …). |
+| `packages/youtube` | The publish + channel-management system: OAuth (multi-account), upload queue, playlist sync, scheduling, Analytics, comments, SEO tooling, cross-channel dashboard. One implementation shared by the CLI and the GUI. |
+| `packages/mcp-server` | Model Context Protocol server exposing 31 tools (editing/render + YouTube SEO helpers) to any MCP client (Claude Desktop, Claude Code, …). |
 | `apps/desktop` | Electron + React desktop app: media bin, timeline, live preview, export, AI Editor console, Publish panel. |
 
 ---
@@ -196,7 +200,7 @@ its changes appear live.**
 > Put the first 8 seconds of beach.mp4 on the main track, add a title "Summer 2026" for the
 > first 3 seconds, put the music underneath at 30% volume with a 2s fade-out, then render it.
 
-## The 29 MCP tools
+## The 31 MCP tools
 
 - **Session:** `create_project`, `open_project`, `save_project`, `list_projects`, `get_timeline`, `undo`, `redo`
 - **Media:** `import_media`
@@ -205,9 +209,12 @@ its changes appear live.**
 - **Effects:** `set_clip_speed`, `set_clip_volume`, `set_clip_opacity`, `set_clip_fades`, `set_clip_audio_fades`, `set_clip_transform`, `set_transition`
 - **Text:** `add_text`, `update_text`
 - **Render:** `render`, `create_music_video`
+- **YouTube SEO:** `check_video_seo` (deterministic checklist scored against YouTube's own metadata
+  conventions), `suggest_keywords` (real keyword ideas from YouTube's public autocomplete — actual
+  search demand, not a guess)
 
-Every tool returns the full, id-annotated timeline so the agent stays grounded on the exact
-state after each edit.
+Every tool returns the full, id-annotated timeline (or, for the SEO tools, a plain-text report) so
+the agent stays grounded on the exact state after each edit.
 
 ---
 
@@ -250,18 +257,23 @@ color so each video stays visually distinct.
 
 ---
 
-## YouTube publish system
+## YouTube publish + channel management system
 
-A full release pipeline: a scheduled upload queue, automatic playlist sync, multi-account
-support, and real scheduled automation — usable identically from the CLI or from the **📤
-Publish** panel in the desktop app. The CLI and the GUI call the exact same backend
-(`packages/youtube`), so nothing behaves differently between them.
+Not just an uploader — a full release pipeline *and* a channel-management suite: scheduling,
+playlists, multi-account, real Analytics, comments, SEO tooling, and a cross-channel comparison
+dashboard, usable identically from the CLI or the **📤 Publish** panel in the desktop app. The CLI
+and the GUI call the exact same backend (`packages/youtube`), so nothing behaves differently
+between them — and every capability listed below has a CLI command *and* a GUI control.
 
 ### What it does
 
 - **Scheduled queue** — upload every video **private** now, with a **publishAt** you set; YouTube
   auto-flips each one to public at that exact moment. Nothing goes live without a schedule you
   chose.
+- **Release Schedule dashboard** — every folder's releases in one chronological view, toggleable
+  between a **list** and a **calendar grid** (month navigation, click a day to reschedule inline).
+  "Refresh from YouTube" checks each video's *actual* current status — a local "uploaded" record
+  only ever meant "we uploaded it," not "it's public yet."
 - **Quota-aware, resumable** — YouTube's API defaults to a 10,000-unit daily quota (uploads cost
   1,600 units each, so ~6/day) — the queue uploads what it can and picks up where it left off next
   run, automatically.
@@ -280,11 +292,39 @@ Publish** panel in the desktop app. The CLI and the GUI call the exact same back
   closed.
 - **Auto thumbnails** — each video's thumbnail is pulled straight from its own clean frame 0 (see
   above) — no separate thumbnail step.
+- **Live stats mirroring** — view/like/comment counts pulled straight from YouTube and cached
+  alongside each video, refreshed in the same call as live-status (no extra API quota cost).
+- **Real Analytics** — watch time, average view duration/percentage, subscribers gained/lost, and
+  traffic sources per video, via the actual YouTube Analytics API (a separate API + OAuth scope
+  from everything else here — see setup below).
+- **Cross-channel comparison dashboard** — one table, one row per connected channel: subscribers,
+  lifetime views, 28-day views/watch-time/retention/subscriber-delta, and a 7-day trend arrow —
+  so adding a second channel turns this into a real side-by-side comparison automatically.
+- **Comments** — read and reply to comments on your own videos, or post a brand-new top-level
+  comment (e.g. right after upload). YouTube's public API has no way to *pin* a comment
+  (Studio-only) — that limitation is documented, not faked.
+- **Deterministic SEO checklist** — scores a title/description/tags draft against YouTube's own
+  documented conventions (title length, description length/links/hashtags, tag count and 500-char
+  budget, title↔tag keyword overlap) — a checklist, not a model's guess. Also exposed as an MCP
+  tool (`check_video_seo`) so an AI agent can draft-then-score metadata itself.
+- **Real keyword suggestions** — tag/title ideas straight from YouTube's own public
+  search-autocomplete endpoint (also an MCP tool: `suggest_keywords`) — reflects actual search
+  demand, no API key needed.
+- **Description templates + auto-comment** — a per-folder description template (`{title}`
+  substituted) so you write your links/CTA/hashtags once, plus an optional comment auto-posted
+  right after each upload.
+- **Post-upload editing** — edit title/description/tags/privacy/category on a video that's
+  *already live*, not just before it uploads — the same edit action just also pushes to YouTube
+  when the video's already public.
+- **Bulk edit** — apply a tag add/remove or privacy change across many already-uploaded videos at
+  once (e.g. retagging a whole back-catalog).
 
 ### One-time setup (~10 minutes, you do this part — it needs your own Google login)
 
 1. Go to [console.cloud.google.com](https://console.cloud.google.com), create (or pick) a project.
-2. **APIs & Services → Library** → search "YouTube Data API v3" → **Enable**.
+2. **APIs & Services → Library** → enable **"YouTube Data API v3"** *and* **"YouTube Analytics
+   API"** (two separate toggles — Analytics is easy to miss, and its own API calls fail with a
+   clear "not enabled for this project" error + direct link until you do this).
 3. **APIs & Services → OAuth consent screen** → User type **External** → fill in the required
    fields (app name, your email) → under **Test users**, add your own Google account email.
    Leave the app in **Testing** status — no Google review needed for personal use. (Refresh
@@ -299,6 +339,10 @@ Publish** panel in the desktop app. The CLI and the GUI call the exact same back
    This opens your default browser to Google's consent screen — **you** log in and click Allow.
    Credentials save locally at `~/.omnicut/youtube/` — never inside a synced/cloud folder.
 6. For custom thumbnails, your channel needs to be **phone-verified**: [youtube.com/verify](https://www.youtube.com/verify).
+7. **If you connected an account before Analytics/Comments existed**, its token predates those
+   scopes — re-authorize it once to grant them: `node scripts/youtube-queue.mjs account-reauth`
+   (or the **⟲** button next to the account in the Publish panel). One browser click, no need to
+   remove/re-add the account.
 
 ### Using the queue (CLI)
 
@@ -321,16 +365,48 @@ node scripts/youtube-queue.mjs run-everything
 # Multiple channels
 node scripts/youtube-queue.mjs account-add second-channel --label "My Other Channel"
 node scripts/youtube-queue.mjs account-set "<folder>" --account second-channel
+
+# Every folder's releases, one chronological list; and real status/stats from YouTube
+node scripts/youtube-queue.mjs schedule
+node scripts/youtube-queue.mjs refresh-live "<folder>"
+
+# Analytics + cross-channel dashboard
+node scripts/youtube-queue.mjs analytics "<folder>" "<video-id>"
+node scripts/youtube-queue.mjs dashboard
+
+# Comments
+node scripts/youtube-queue.mjs comments "<folder>" "<video-id>"
+node scripts/youtube-queue.mjs comment-post "<folder>" "<video-id>" --text "Thanks for watching!"
+node scripts/youtube-queue.mjs comment-reply "<folder>" "<parent-comment-id>" --text "..."
+
+# SEO checklist + real keyword suggestions
+node scripts/youtube-queue.mjs seo-check "<folder>" "<video-id>"
+node scripts/youtube-queue.mjs keyword-suggest "tech house music"
+
+# Bulk-edit tags/privacy across many already-uploaded videos at once
+node scripts/youtube-queue.mjs bulk-edit "<folder>" --all --add-tag "new music"
+
+# Per-folder defaults for new uploads: category, made-for-kids, license, description template, auto-comment, …
+node scripts/youtube-queue.mjs upload-settings-set "<folder>" --made-for-kids --description-template "{title}\n\nListen everywhere: ..."
 ```
 
-Run `node scripts/youtube-queue.mjs` with no arguments for the full command list (accounts,
-folders, rescheduling, thumbnail retries, and more).
+Run `node scripts/youtube-queue.mjs` with no arguments for the full command list.
 
 ### Using the queue (GUI)
 
-Click **📤 Publish** in the desktop app's toolbar for the same capabilities as buttons: connect
-accounts, pick folders, edit each video's title/schedule inline, run uploads, configure and sync
-playlists, and toggle daily automation — with live progress as it works.
+Click **📤 Publish** in the desktop app's toolbar. Alongside the per-folder queue (accounts,
+folders, inline title/schedule/description/tags editing — for pending *and* already-live videos
+alike, upload settings, playlist sync, daily automation), two dedicated overview screens live in
+the sidebar:
+
+- **📅 Release Schedule** — every folder's releases in one place, List or Calendar, with live
+  status/stats refresh.
+- **📊 Channel Dashboard** — the cross-channel comparison table described above.
+
+Per-video, click **📊** for its Analytics panel or **💬** for its comments (read, reply, or post
+new) — both inline, no extra navigation. While editing a video's metadata, a live **SEO
+checklist** and a **keyword-suggest** box (click a suggestion to add it as a tag) show up right
+in the edit form.
 
 ---
 

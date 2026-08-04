@@ -51,6 +51,24 @@ const api: DesktopAPI = {
   ytRun: (folder, limit) => ipcRenderer.invoke("yt:queue:run", folder, limit),
   ytRunAll: (folders) => ipcRenderer.invoke("yt:queue:runAll", folders),
   ytRetryThumbnails: (folder) => ipcRenderer.invoke("yt:queue:retryThumbnails", folder),
+  ytGetSchedule: () => ipcRenderer.invoke("yt:schedule:get"),
+  ytRefreshLiveStatus: (folder) => ipcRenderer.invoke("yt:schedule:refreshLive", folder),
+  ytSetUploadDefaults: (folder, defaults) => ipcRenderer.invoke("yt:uploadDefaults:set", folder, defaults),
+  ytGetAnalytics: (folder, entryId) => ipcRenderer.invoke("yt:analytics:get", folder, entryId),
+  ytReauthorizeAccount: (id) => ipcRenderer.invoke("yt:accounts:reauthorize", id),
+  ytGetChannelHealth: (accountId) => ipcRenderer.invoke("yt:channelHealth:get", accountId),
+  ytListComments: (folder, entryId) => ipcRenderer.invoke("yt:comments:list", folder, entryId),
+  ytPostComment: (folder, entryId, text) => ipcRenderer.invoke("yt:comments:post", folder, entryId, text),
+  ytReplyComment: (folder, parentId, text) => ipcRenderer.invoke("yt:comments:reply", folder, parentId, text),
+  ytCheckSeo: (input) => ipcRenderer.invoke("yt:seo:check", input),
+  ytSuggestKeywords: (query) => ipcRenderer.invoke("yt:seo:suggestKeywords", query),
+  ytGetDashboard: () => ipcRenderer.invoke("yt:dashboard:get"),
+  ytBulkUpdate: (folder, entryIds, patch) => ipcRenderer.invoke("yt:bulkUpdate", folder, entryIds, patch),
+  onBulkUpdateProgress: (cb: (e: { folder: string; id: string }) => void) => {
+    const handler = (_e: unknown, data: { folder: string; id: string }) => cb(data);
+    ipcRenderer.on("yt:bulkUpdate:progress", handler);
+    return () => ipcRenderer.removeListener("yt:bulkUpdate:progress", handler);
+  },
   onUploadProgress: (cb: (e: { folder: string; ev: UploadProgressEvent }) => void) => {
     const handler = (_e: unknown, data: { folder: string; ev: UploadProgressEvent }) => cb(data);
     ipcRenderer.on("yt:upload:progress", handler);

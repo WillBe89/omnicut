@@ -9,6 +9,7 @@ import {
   setTrackMuted, setTransition, splitClip, trimClip, updateText,
 } from "@video-editor/core";
 import { probeMedia, renderProject, renderMusicVideo, renderMusicVideoReactive } from "@video-editor/engine-ffmpeg";
+import { checkSeo, suggestKeywords } from "@video-editor/youtube";
 import { ProjectStore } from "./store.js";
 import { formatTimeline } from "./format.js";
 
@@ -477,6 +478,39 @@ export function createServer(store: ProjectStore): McpServer {
           });
       process.stderr.write("\n");
       return text(`Rendered ${a.reactive ? "reactive " : ""}music video (${result.duration.toFixed(1)}s) → ${result.outputPath}`);
+    },
+  );
+
+  // ───────────────────────────────────────────────────────── YouTube SEO
+
+  server.registerTool(
+    "check_video_seo",
+    {
+      description:
+        "Score a draft title/description/tags against YouTube's own documented metadata conventions (title length, description length/links/hashtags, tag count and character budget, title↔tag keyword overlap) — a deterministic checklist, not a guess. Use this to check your own draft before suggesting it, then iterate.",
+      inputSchema: {
+        title: z.string(),
+        description: z.string(),
+        tags: z.array(z.string()).optional().describe("Defaults to no tags."),
+      },
+    },
+    async ({ title, description, tags }) => {
+      const report = checkSeo({ title, description, tags: tags ?? [] });
+      const lines = report.checks.map((c) => `${c.passed ? "✓" : "✗"} ${c.label}: ${c.message}`);
+      return text(`SEO score: ${report.score}%\n\n${lines.join("\n")}`);
+    },
+  );
+
+  server.registerTool(
+    "suggest_keywords",
+    {
+      description:
+        "Keyword/tag ideas straight from YouTube's own public search-autocomplete endpoint — reflects real search demand (the same suggestions a person typing into YouTube's search box would see), not a guess. Useful for picking tags or title phrasing.",
+      inputSchema: { query: z.string().describe("A partial keyword, e.g. an artist name, genre, or mood.") },
+    },
+    async ({ query }) => {
+      const suggestions = await suggestKeywords(query);
+      return text(suggestions.length ? suggestions.join("\n") : "(no suggestions)");
     },
   );
 

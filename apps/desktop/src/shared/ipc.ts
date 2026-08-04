@@ -1,11 +1,14 @@
 import type { MediaAsset, Project } from "@video-editor/core";
 import type {
   Account, KnownFolder, Queue, QueueEntry, PrivacyStatus, UploadProgressEvent,
-  SyncPlan, FolderRunResult,
+  SyncPlan, FolderRunResult, ScheduleItem, UploadDefaults, QueueEntryPatch, EntryAnalytics, ChannelTrend,
+  CommentSummary, SeoReport, BulkEditPatch, BulkEditResult, ChannelDashboardData,
 } from "@video-editor/youtube";
 
 export type {
   Account, KnownFolder, Queue, QueueEntry, PrivacyStatus, UploadProgressEvent, SyncPlan, FolderRunResult,
+  ScheduleItem, UploadDefaults, QueueEntryPatch, EntryAnalytics, ChannelTrend, CommentSummary, SeoReport,
+  BulkEditPatch, BulkEditResult, ChannelDashboardData,
 };
 
 export interface FolderSummary extends KnownFolder {
@@ -91,7 +94,7 @@ export interface DesktopAPI {
   // YouTube — queue
   ytGetQueue(folder: string): Promise<Queue>;
   ytAddToQueue(folder: string, opts: { everyDays?: number; startDate?: string; extraTags?: string[]; titlePrefix?: string; description?: string }): Promise<{ id: string; publishAt: string }[]>;
-  ytUpdateEntry(folder: string, entryId: string, patch: Partial<Pick<QueueEntry, "title" | "description" | "tags" | "publishAt" | "privacyStatus">>): Promise<QueueEntry>;
+  ytUpdateEntry(folder: string, entryId: string, patch: QueueEntryPatch): Promise<QueueEntry>;
   ytReschedule(folder: string, startDate: string, everyDays: number): Promise<QueueEntry[]>;
   ytRemoveEntry(folder: string, entryId: string): Promise<void>;
   ytSetAccount(folder: string, accountId: string): Promise<void>;
@@ -100,6 +103,38 @@ export interface DesktopAPI {
   ytRetryThumbnails(folder: string): Promise<{ fixed: number; total: number; quotaHit: boolean }>;
   onUploadProgress(cb: (e: { folder: string; ev: UploadProgressEvent }) => void): () => void;
   onThumbnailProgress(cb: (e: { folder: string; ev: { id: string; ok: boolean; error?: string } }) => void): () => void;
+
+  // YouTube — cross-folder release schedule
+  ytGetSchedule(): Promise<ScheduleItem[]>;
+  ytRefreshLiveStatus(folder: string): Promise<QueueEntry[]>;
+
+  // YouTube — per-folder upload defaults
+  ytSetUploadDefaults(folder: string, defaults: UploadDefaults): Promise<void>;
+
+  // YouTube — analytics
+  ytGetAnalytics(folder: string, entryId: string): Promise<EntryAnalytics>;
+
+  // YouTube — accounts
+  ytReauthorizeAccount(id: string): Promise<{ channel: string }>;
+
+  // YouTube — channel health trends
+  ytGetChannelHealth(accountId: string): Promise<ChannelTrend>;
+
+  // YouTube — comments
+  ytListComments(folder: string, entryId: string): Promise<CommentSummary[]>;
+  ytPostComment(folder: string, entryId: string, text: string): Promise<string>;
+  ytReplyComment(folder: string, parentId: string, text: string): Promise<string>;
+
+  // YouTube — SEO checklist + keyword suggestions
+  ytCheckSeo(input: { title: string; description: string; tags: string[] }): Promise<SeoReport>;
+  ytSuggestKeywords(query: string): Promise<string[]>;
+
+  // YouTube — cross-channel dashboard
+  ytGetDashboard(): Promise<ChannelDashboardData[]>;
+
+  // YouTube — bulk edit across many already-uploaded videos
+  ytBulkUpdate(folder: string, entryIds: string[], patch: BulkEditPatch): Promise<BulkEditResult>;
+  onBulkUpdateProgress(cb: (e: { folder: string; id: string }) => void): () => void;
 
   // YouTube — playlist
   ytSetPlaylist(folder: string, config: { title: string; description?: string; privacyStatus: PrivacyStatus }): Promise<void>;

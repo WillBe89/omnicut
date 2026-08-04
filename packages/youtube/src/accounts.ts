@@ -168,3 +168,27 @@ export async function completeAccountAuth(accountId: string): Promise<string> {
     return channelTitle;
   });
 }
+
+/** Force a fresh consent screen for an account whose stored token predates a
+ *  scope that got added later (e.g. Analytics) — `authorize()` otherwise just
+ *  reuses whatever's on disk and never notices new scopes are needed. Deletes
+ *  the existing token first so the browser flow actually runs again. */
+export async function reauthorizeAccount(accountId: string): Promise<string> {
+  const account = getAccount(accountId);
+  if (!account) throw new Error(`Unknown account "${accountId}". Add it first.`);
+  return withInProcessQueue(accountId, async () => {
+    const release = await acquireFileLock(accountId);
+    try {
+      if (existsSync(account.tokenPath)) unlinkSync(account.tokenPath);
+      const auth = await authorize(account.clientSecretPath, account.tokenPath);
+      const { google } = await import("googleapis");
+      const youtube = google.youtube({ version: "v3", auth });
+      const res = await youtube.channels.list({ part: ["snippet"], mine: true });
+      const channelTitle = res.data.items?.[0]?.snippet?.title ?? "(unknown channel)";
+      updateAccount(accountId, { channelTitle });
+      return channelTitle;
+    } finally {
+      release();
+    }
+  });
+}
