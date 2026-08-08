@@ -178,6 +178,21 @@ button.danger { background: rgba(255, 107, 139, 0.16); border-color: rgba(255, 1
 .modal label input, .modal label select { display: block; width: 100%; margin-top: 5px; font-family: inherit; font-size: 13px; font-weight: 600; color: var(--text); background: rgba(0, 0, 0, 0.3); border: 1px solid var(--glass-border); border-radius: 10px; padding: 9px; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
 
+.account-add-row { display: flex; gap: 6px; }
+.wizard-link { color: var(--accent); }
+
+.modal-wizard { width: 480px; max-height: 80vh; overflow-y: auto; }
+.modal-wizard p { font-size: 13px; line-height: 1.5; color: var(--text); margin: 0 0 10px; }
+.modal-wizard p.hint { color: var(--muted); font-size: 12px; }
+.wizard-progress { display: flex; gap: 5px; margin-bottom: 16px; }
+.wizard-dot { flex: 1; height: 4px; border-radius: 2px; background: rgba(255,255,255,0.1); }
+.wizard-dot.active { background: var(--accent); }
+.wizard-dot.done { background: rgba(47,214,160,0.6); }
+.wizard-ext-link { color: var(--accent); font-weight: 700; text-decoration: none; }
+.wizard-list { margin: 0 0 12px; padding-left: 18px; font-size: 13px; line-height: 1.6; color: var(--text); }
+.wizard-file-ok { color: #8ff0cf; font-size: 12px; word-break: break-all; }
+.wizard-file-error { color: var(--danger); font-size: 12px; }
+
 /* AI Agent drawer + console */
 .agent-drawer { position: fixed; top: 70px; right: 14px; bottom: 14px; width: 460px; z-index: 40; animation: slideIn 0.22s ease; }
 @keyframes slideIn { from { transform: translateX(30px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }

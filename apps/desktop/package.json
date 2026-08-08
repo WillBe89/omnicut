@@ -1,6 +1,6 @@
 {
   "name": "@video-editor/desktop",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "OmniCut desktop app: timeline editor, reactive music-video engine, YouTube publish queue, and an in-app AI agent console — all syncing live via the shared project store.",
   "author": "WillBe89",
   "type": "module",

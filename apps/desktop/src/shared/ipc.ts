@@ -86,6 +86,11 @@ export interface DesktopAPI {
   ytRemoveAccount(id: string): Promise<void>;
   ytPickClientSecret(): Promise<string | null>;
 
+  // YouTube — guided setup wizard (first-time connection)
+  ytHasCredentials(): Promise<boolean>;
+  ytValidateClientSecret(path: string): Promise<{ ok: true; clientId: string } | { ok: false; error: string }>;
+  ytSetupFirstAccount(id: string, label: string, clientSecretPath: string): Promise<{ channel: string }>;
+
   // YouTube — folders
   ytListFolders(): Promise<FolderSummary[]>;
   ytPickFolder(): Promise<string | null>;

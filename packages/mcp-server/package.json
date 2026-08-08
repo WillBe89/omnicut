@@ -1,6 +1,6 @@
 {
   "name": "@video-editor/mcp-server",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "MCP server exposing deterministic video-editing tools to an AI client.",
   "type": "module",
   "bin": {

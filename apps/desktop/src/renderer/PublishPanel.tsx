@@ -48,6 +48,7 @@ export function PublishPanel({ onClose }: { onClose: () => void }) {
   const [log, setLog] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [showAddAccount, setShowAddAccount] = useState(false);
+  const [showWizard, setShowWizard] = useState(false);
   const [auto, setAuto] = useState<AutoSyncStatus | null>(null);
   const [titlePrefix, setTitlePrefix] = useState("");
   const [schedule, setSchedule] = useState<ScheduleItem[] | null>(null);
@@ -185,7 +186,12 @@ export function PublishPanel({ onClose }: { onClose: () => void }) {
               </button>
             </div>
           ))}
-          <button onClick={() => setShowAddAccount(true)}>+ Add account</button>
+          <div className="account-add-row">
+            <button onClick={() => setShowAddAccount(true)}>+ Add account</button>
+            <button className="wizard-link" onClick={() => setShowWizard(true)} title="Step-by-step walkthrough, including the Google Cloud setup — recommended if you haven't done this before">
+              🧙 Guided setup
+            </button>
+          </div>
 
           <div className="publish-section-label" style={{ marginTop: 16 }}>Overview</div>
           <div
@@ -293,6 +299,13 @@ export function PublishPanel({ onClose }: { onClose: () => void }) {
         <AddAccountModal
           onCancel={() => setShowAddAccount(false)}
           onDone={() => { setShowAddAccount(false); refreshAccounts(); }}
+          pushLog={pushLog}
+        />
+      )}
+      {showWizard && (
+        <SetupWizard
+          onCancel={() => setShowWizard(false)}
+          onDone={() => { setShowWizard(false); refreshAccounts(); }}
           pushLog={pushLog}
         />
       )}
@@ -1092,6 +1105,209 @@ function AutoSyncSection({ folder, auto, onChanged, pushLog }: {
           </>
         ) : (
           <button className="primary" onClick={enable}>Enable</button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const CLOUD_LINKS = {
+  createProject: "https://console.cloud.google.com/projectcreate",
+  enableDataApi: "https://console.cloud.google.com/apis/library/youtube.googleapis.com",
+  enableAnalyticsApi: "https://console.cloud.google.com/apis/library/youtubeanalytics.googleapis.com",
+  oauthConsent: "https://console.cloud.google.com/apis/credentials/consent",
+  credentials: "https://console.cloud.google.com/apis/credentials",
+  verifyChannel: "https://www.youtube.com/verify",
+};
+
+function ExtLink({ href, children }: { href: string; children: React.ReactNode }) {
+  return <a href={href} target="_blank" rel="noreferrer" className="wizard-ext-link">{children} ↗</a>;
+}
+
+/** Step-by-step guided setup for people who haven't done this before — walks
+ *  through the ACTUAL Google Cloud Console steps (which can't be automated;
+ *  they need your own Google login) with direct links, then does the real
+ *  connection at the end. Skips straight to the last step if credentials
+ *  already exist (i.e. this is an additional account, not the first one). */
+function SetupWizard({ onCancel, onDone, pushLog }: { onCancel: () => void; onDone: () => void; pushLog: (s: string) => void }) {
+  const [checking, setChecking] = useState(true);
+  const [hasCredentials, setHasCredentials] = useState(false);
+  const [stepIndex, setStepIndex] = useState(0);
+  const [id, setId] = useState("");
+  const [label, setLabel] = useState("");
+  const [clientSecretPath, setClientSecretPath] = useState<string | null>(null);
+  const [fileError, setFileError] = useState<string | null>(null);
+  const [working, setWorking] = useState(false);
+  const [connectError, setConnectError] = useState<string | null>(null);
+  const [result, setResult] = useState<string | null>(null);
+
+  useEffect(() => {
+    api.ytHasCredentials().then((has) => {
+      setHasCredentials(has);
+      setId(has ? "" : "default");
+      setChecking(false);
+    });
+  }, []);
+
+  const steps = hasCredentials
+    ? (["welcome", "connect"] as const)
+    : (["welcome", "cloud-project", "enable-apis", "oauth-consent", "oauth-client", "connect"] as const);
+  const step = steps[stepIndex];
+  const isFirstSetup = !hasCredentials;
+
+  const next = () => setStepIndex((i) => Math.min(i + 1, steps.length - 1));
+  const back = () => setStepIndex((i) => Math.max(i - 1, 0));
+
+  const pickFile = async () => {
+    const path = await api.ytPickClientSecret();
+    if (!path) return;
+    const v = await api.ytValidateClientSecret(path);
+    if (v.ok) { setClientSecretPath(path); setFileError(null); }
+    else { setClientSecretPath(null); setFileError(v.error); }
+  };
+
+  const connect = async () => {
+    if (!id.trim()) return;
+    setWorking(true);
+    setConnectError(null);
+    try {
+      pushLog(`Connecting "${id}"… check your browser.`);
+      const { channel } = isFirstSetup
+        ? await api.ytSetupFirstAccount(id.trim(), label.trim() || id.trim(), clientSecretPath!)
+        : await api.ytAddAccount(id.trim(), label.trim() || id.trim());
+      pushLog(`✅ "${id}" connected — channel "${channel}".`);
+      setResult(channel);
+    } catch (err) {
+      const msg = (err as Error).message;
+      setConnectError(msg);
+      pushLog(`❌ ${msg}`);
+    } finally { setWorking(false); }
+  };
+
+  if (checking) return null;
+
+  return (
+    <div className="modal-backdrop" onClick={onCancel}>
+      <div className="modal modal-wizard" onClick={(e) => e.stopPropagation()}>
+        {result ? (
+          <>
+            <h2>🎉 Connected!</h2>
+            <p>"{id}" is now connected — channel <b>{result}</b>.</p>
+            <p className="hint">Next: register a folder of rendered videos for it from the sidebar, or set an existing folder to use this account.</p>
+            <div className="modal-actions"><button className="primary" onClick={onDone}>Done</button></div>
+          </>
+        ) : (
+          <>
+            <div className="wizard-progress">
+              {steps.map((s, i) => <div key={s} className={`wizard-dot ${i === stepIndex ? "active" : i < stepIndex ? "done" : ""}`} />)}
+            </div>
+
+            {step === "welcome" && (
+              <>
+                <h2>{isFirstSetup ? "Connect YouTube — first-time setup" : "Connect another YouTube account"}</h2>
+                {isFirstSetup ? (
+                  <p>
+                    This walks through the one-time Google Cloud setup (~10 minutes, needs your own Google
+                    login) and then connects your channel. Each step has a direct link and a short explanation
+                    — nothing here can be done on your behalf, since it all needs your Google account.
+                  </p>
+                ) : (
+                  <p>
+                    Your OAuth app is already set up, so this is quick: just sign in with the Google account
+                    for the channel you want to add, and it's connected.
+                  </p>
+                )}
+                <div className="modal-actions">
+                  <button onClick={onCancel}>Cancel</button>
+                  <button className="primary" onClick={next}>Let's go</button>
+                </div>
+              </>
+            )}
+
+            {step === "cloud-project" && (
+              <>
+                <h2>Step 1 — Google Cloud project</h2>
+                <p>Create a new project (or you can reuse an existing one if you already have one for something else).</p>
+                <p><ExtLink href={CLOUD_LINKS.createProject}>Create a Google Cloud project</ExtLink></p>
+                <div className="modal-actions">
+                  <button onClick={back}>Back</button>
+                  <button className="primary" onClick={next}>I've done this — Next</button>
+                </div>
+              </>
+            )}
+
+            {step === "enable-apis" && (
+              <>
+                <h2>Step 2 — Enable two APIs</h2>
+                <p>These are two separate toggles in the same project — both are needed (Analytics is easy to miss).</p>
+                <p><ExtLink href={CLOUD_LINKS.enableDataApi}>Enable YouTube Data API v3</ExtLink> — uploading, playlists, comments, editing</p>
+                <p><ExtLink href={CLOUD_LINKS.enableAnalyticsApi}>Enable YouTube Analytics API</ExtLink> — watch time, retention, traffic sources</p>
+                <div className="modal-actions">
+                  <button onClick={back}>Back</button>
+                  <button className="primary" onClick={next}>I've done this — Next</button>
+                </div>
+              </>
+            )}
+
+            {step === "oauth-consent" && (
+              <>
+                <h2>Step 3 — OAuth consent screen</h2>
+                <p><ExtLink href={CLOUD_LINKS.oauthConsent}>Open the OAuth consent screen</ExtLink></p>
+                <ul className="wizard-list">
+                  <li>User type: <b>External</b></li>
+                  <li>Fill in an app name + your email where asked</li>
+                  <li>Under <b>Test users</b>, add your own Google account email (and any other channel's
+                    email you'll connect later, e.g. a second channel)</li>
+                  <li>Leave it in <b>Testing</b> status — no Google review needed for personal use</li>
+                </ul>
+                <div className="modal-actions">
+                  <button onClick={back}>Back</button>
+                  <button className="primary" onClick={next}>I've done this — Next</button>
+                </div>
+              </>
+            )}
+
+            {step === "oauth-client" && (
+              <>
+                <h2>Step 4 — Create OAuth credentials</h2>
+                <p><ExtLink href={CLOUD_LINKS.credentials}>Open Credentials</ExtLink></p>
+                <ul className="wizard-list">
+                  <li>Create Credentials → OAuth client ID</li>
+                  <li>Application type: <b>Desktop app</b> (important — not "Web application")</li>
+                  <li>Create → Download JSON</li>
+                </ul>
+                <p>Then pick that downloaded file here:</p>
+                <button onClick={pickFile}>{clientSecretPath ? "Change file…" : "Pick downloaded JSON…"}</button>
+                {clientSecretPath && !fileError && <p className="wizard-file-ok">✓ Looks good: {clientSecretPath}</p>}
+                {fileError && <p className="wizard-file-error">✗ {fileError}</p>}
+                <div className="modal-actions">
+                  <button onClick={back}>Back</button>
+                  <button className="primary" onClick={next} disabled={!clientSecretPath || !!fileError}>Next</button>
+                </div>
+              </>
+            )}
+
+            {step === "connect" && (
+              <>
+                <h2>{isFirstSetup ? "Step 5 — Connect" : "Connect"}</h2>
+                <label>Account ID<input value={id} onChange={(e) => setId(e.target.value)} placeholder="e.g. default, kids-books" /></label>
+                <label>Label (optional)<input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. Kids Books Channel" /></label>
+                <p className="hint">Clicking Connect opens your browser to sign in with the Google account for this channel.</p>
+                {connectError && (
+                  <p className="wizard-file-error">
+                    ✗ {connectError}
+                    {/insufficient|access.?blocked|denied/i.test(connectError) && " — double check you added this Google account under Test users on the OAuth consent screen (step 3)."}
+                  </p>
+                )}
+                <div className="modal-actions">
+                  <button onClick={back} disabled={working}>Back</button>
+                  <button className="primary" onClick={connect} disabled={working || !id.trim() || (isFirstSetup && !clientSecretPath)}>
+                    {working ? "Connecting…" : "Connect"}
+                  </button>
+                </div>
+              </>
+            )}
+          </>
         )}
       </div>
     </div>

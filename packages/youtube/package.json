@@ -1,6 +1,6 @@
 {
   "name": "@video-editor/youtube",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "YouTube upload queue: OAuth2, resumable uploads, scheduled publish, thumbnail extraction from the video's own clean frame 0.",
   "type": "module",
   "main": "./dist/index.js",

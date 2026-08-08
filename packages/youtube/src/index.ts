@@ -14,7 +14,9 @@ export type { SyncPlan } from "./sync.js";
 export { updateVideoSchedule } from "./schedule.js";
 export {
   CREDENTIALS_DIR, CLIENT_SECRET_PATH, TOKEN_PATH, hasStoredCredentials, hasStoredToken, authorizeStored,
+  validateClientSecretFile, installClientSecret,
 } from "./credentials.js";
+export type { ClientSecretValidation } from "./credentials.js";
 export {
   queuePathFor, getQueueSnapshot, addFolderToQueue, runQueueUploads, retryQueueThumbnails,
   setQueuePlaylist, setQueueAccount, previewPlaylistSync, syncQueuePlaylist,
@@ -43,6 +45,6 @@ export {
 export type { KnownFolder } from "./registry.js";
 export {
   DEFAULT_ACCOUNT_ID, listAccounts, getAccount, addAccount, removeAccount, withAccountAuth, completeAccountAuth,
-  reauthorizeAccount,
+  reauthorizeAccount, setupFirstAccount,
 } from "./accounts.js";
 export type { Account } from "./accounts.js";

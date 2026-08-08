@@ -8,7 +8,10 @@
  */
 import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync, unlinkSync, openSync, closeSync } from "node:fs";
 import { join } from "node:path";
-import { CREDENTIALS_DIR, CLIENT_SECRET_PATH as DEFAULT_CLIENT_SECRET_PATH, TOKEN_PATH as DEFAULT_TOKEN_PATH } from "./credentials.js";
+import {
+  CREDENTIALS_DIR, CLIENT_SECRET_PATH as DEFAULT_CLIENT_SECRET_PATH, TOKEN_PATH as DEFAULT_TOKEN_PATH,
+  hasStoredCredentials, installClientSecret,
+} from "./credentials.js";
 import { authorize, type OAuth2Client } from "./auth.js";
 
 const ACCOUNTS_DIR = join(CREDENTIALS_DIR, "accounts");
@@ -167,6 +170,22 @@ export async function completeAccountAuth(accountId: string): Promise<string> {
     updateAccount(accountId, { channelTitle });
     return channelTitle;
   });
+}
+
+/** Full first-time setup: install the just-downloaded OAuth client JSON into
+ *  OmniCut's own stable storage (so it survives the original download being
+ *  moved/deleted), register the first account, and run its consent flow —
+ *  everything the guided setup wizard's last step needs in one call. Only
+ *  for when NO credentials exist yet; for an additional account on an
+ *  already-set-up install, use addAccount()+completeAccountAuth() directly
+ *  (no file needed, they share the existing OAuth client). */
+export async function setupFirstAccount(id: string, label: string, clientSecretSourcePath: string): Promise<string> {
+  if (hasStoredCredentials()) {
+    throw new Error("Credentials already exist — use \"Add account\" instead of guided setup.");
+  }
+  installClientSecret(clientSecretSourcePath);
+  addAccount(id, label);
+  return completeAccountAuth(id);
 }
 
 /** Force a fresh consent screen for an account whose stored token predates a

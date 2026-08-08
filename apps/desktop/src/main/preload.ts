@@ -37,6 +37,9 @@ const api: DesktopAPI = {
   ytAddAccount: (id, label, clientSecretPath) => ipcRenderer.invoke("yt:accounts:add", id, label, clientSecretPath),
   ytRemoveAccount: (id) => ipcRenderer.invoke("yt:accounts:remove", id),
   ytPickClientSecret: () => ipcRenderer.invoke("yt:accounts:pickClientSecret"),
+  ytHasCredentials: () => ipcRenderer.invoke("yt:setup:hasCredentials"),
+  ytValidateClientSecret: (path) => ipcRenderer.invoke("yt:setup:validateClientSecret", path),
+  ytSetupFirstAccount: (id, label, clientSecretPath) => ipcRenderer.invoke("yt:setup:firstAccount", id, label, clientSecretPath),
 
   ytListFolders: () => ipcRenderer.invoke("yt:folders:list"),
   ytPickFolder: () => ipcRenderer.invoke("yt:folders:pick"),

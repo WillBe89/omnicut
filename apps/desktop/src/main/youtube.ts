@@ -7,7 +7,8 @@
 import { ipcMain, dialog, type BrowserWindow } from "electron";
 import { basename } from "node:path";
 import {
-  listAccounts, addAccount, removeAccount, completeAccountAuth, reauthorizeAccount,
+  listAccounts, addAccount, removeAccount, completeAccountAuth, reauthorizeAccount, setupFirstAccount,
+  hasStoredCredentials, validateClientSecretFile,
   listKnownFoldersWithSummary, registerFolder, forgetFolder,
   getQueueSnapshot, addFolderToQueue, runQueueUploads, retryQueueThumbnails,
   setQueuePlaylist, setQueueAccount, previewPlaylistSync, syncQueuePlaylist,
@@ -25,6 +26,14 @@ export function registerYoutubeIpc(getWindow: () => BrowserWindow | null): void 
   ipcMain.handle("yt:accounts:add", async (_e, id: string, label: string, clientSecretPath?: string) => {
     addAccount(id, label, clientSecretPath);
     const channel = await completeAccountAuth(id); // pops the user's browser for consent
+    return { channel };
+  });
+
+  // ── Guided setup wizard (first-time YouTube connection) ──
+  ipcMain.handle("yt:setup:hasCredentials", () => hasStoredCredentials());
+  ipcMain.handle("yt:setup:validateClientSecret", (_e, path: string) => validateClientSecretFile(path));
+  ipcMain.handle("yt:setup:firstAccount", async (_e, id: string, label: string, clientSecretPath: string) => {
+    const channel = await setupFirstAccount(id, label, clientSecretPath); // pops the user's browser for consent
     return { channel };
   });
 
