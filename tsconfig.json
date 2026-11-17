@@ -1,0 +1,10 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/core" },
+    { "path": "packages/engine-ffmpeg" },
+    { "path": "packages/youtube" },
+    { "path": "packages/mcp-server" },
+    { "path": "apps/desktop" }
+  ]
+}
